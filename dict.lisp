@@ -1,108 +1,99 @@
 (in-package :dict)
 
-(defstruct hashtrie
+(declaim (inline index make make-dict count))
+
+(defstruct dict
   (count               0 :type positive-fixnum)
   (next-resize-trigger 0 :type positive-fixnum)
-  (root-depth          0 :type positive-fixnum)
-  (root              #() :type simple-vector))
+  (root-bitlen         0 :type fixnum-length)
+  (root              #() :type simple-vector)
+  (test            #'eql :type function)
+  (hash         #'sxhash :type hash-function))
 
-(declaim (inline hash empty-table index nth-index next make make-hashtrie
-                 list-insert relocate-entries))
+(defun make (&key (test #'eql) (hash #'sxhash))
+  (declare #+SBCL (sb-ext:muffle-conditions sb-ext:compiler-note)
+           (function test)
+           (hash-function hash))
+  (make-dict :next-resize-trigger (* 16 4)
+             :root-bitlen 4
+             :test test
+             :hash hash
+             :root (make-array 16 :initial-element '())))
 
-(defun hash (x)
-  (sxhash x))
+(defun count (dict)
+  (dict-count dict))
 
-(defun empty-table ()
-  (make-array 16 :initial-element '()))
+(defun index (len hash-code)
+  (ldb (byte len 0) hash-code))
 
-(defun index (hash-code)
-  (ldb (byte 4 0) hash-code))
-
-(defun nth-index (nth hash-code)
-  (ldb (byte 4 (* nth 4)) hash-code))
-
-(defun next (hash-code)
-  (ash hash-code -4))
-
-(defun make ()
-  (make-hashtrie :next-resize-trigger (* 16 4)
-                 :root (empty-table)))
-
-(defun candidates (hash table depth)
-  (declare #.*fastest* 
-           (positive-fixnum hash depth)
-           (simple-vector table))
-  (if (zerop depth)
-      #1=(aref table (index hash))
-    (candidates (next hash) #1# (1- depth))))
-
-(defun get (key hashtrie)
-  (declare #.*interface*
-           (hashtrie hashtrie))
-  (with-slots (root root-depth) hashtrie
-    (let ((rlt (assoc key (candidates (hash key) root root-depth) :test #'equal)))
-      (if rlt
-          (values (cdr rlt) t)
+(defun get (key dict)
+  (declare #.*interface* (dict dict))
+  (with-slots (root root-bitlen hash test) dict
+    (declare #.*fastest*)
+    (let ((entries (aref root (index root-bitlen (funcall hash key)))))
+      (a.if (assoc key entries :test test)
+            (values (cdr it) t)
         (values nil nil)))))
 
-(defun relocate-entries (entries n)
-  (let ((new-table (empty-table)))
-    (loop FOR e IN entries
-          FOR (key . value) = e
-      DO
-      (push e (aref new-table (nth-index n (hash key)))))
-    new-table))
+(defun resize (dict)
+  (declare #.*fastest* (dict dict))
+  (with-slots (root root-bitlen next-resize-trigger hash) dict
+    (let ((new-root (make-array (* (length root) 16) :initial-element nil))
+          (new-root-bitlen (+ root-bitlen 4)))
+      (declare (fixnum-length new-root-bitlen))
+      (loop FOR entries ACROSS root
+        DO
+        (loop FOR e IN entries
+              FOR index = (index new-root-bitlen (funcall hash (car e)))
+          DO
+          (push e (aref new-root index))))
+    (setf next-resize-trigger (the positive-fixnum (* next-resize-trigger 16))
+          root new-root
+          root-bitlen new-root-bitlen))))
 
-(defun resize-impl (table depth i n)
-  (declare #.*fastest*
-           (simple-vector table)
-           (positive-fixnum depth i))
-  (if (zerop depth)
-      (setf #1=(aref table i) (relocate-entries #1# n))
-    (loop FOR j FROM 0 BELOW 16
-      DO
-      (resize-impl #1# (1- depth) j n))))
-
-(defun resize (hashtrie)
-  (declare #.*fastest*
-           (hashtrie hashtrie))
-  (with-slots (root root-depth next-resize-trigger) hashtrie
-    (loop FOR i FROM 0 BELOW 16
-      DO
-      (resize-impl root root-depth i (1+ root-depth)))
-    (incf root-depth)
-    (setf next-resize-trigger (* next-resize-trigger 16))))
-
-(defun list-insert (key value list)
-  (loop FOR x IN list
-        WHEN (equal key (car x))
-    DO
-      (setf (cdr x) value)
-      (return (values list nil))
-    FINALLY
-      (return (values `(,(cons key value) . ,list) t))))
-
-(defun set-impl (key value hash table depth hashtrie)
-  (declare #.*fastest*
-           (hashtrie hashtrie)
-           (simple-vector table)
-           (positive-fixnum depth))
-  (if (zerop depth)
-      (multiple-value-bind (new-list added?) (list-insert key value #1=(aref table (index hash)))
-        (setf #1# new-list)
+(defun set (key value dict)
+  (declare #.*interface* (dict dict))
+  (with-slots (root root-bitlen count next-resize-trigger hash test) dict
+    (let ((index (index root-bitlen (funcall hash key))))
+      (multiple-value-bind (new-list added?) (acons! key value (aref root index) :test test)
         (when added?
-          (incf (hashtrie-count hashtrie)))
-        hashtrie)
-    (set-impl key value (next hash) #1# (1- depth) hashtrie)))
+          (setf (aref root index) new-list)
+          (incf count)
+          (when (= count next-resize-trigger)
+            (resize dict))))))
+  value)
 
-(defun set (key value hashtrie)
+(defsetf get (key dict) (new-value)
+  `(set ,key ,new-value ,dict))
+
+(defun remove (key dict)
+  (declare #.*interface* (dict dict))
+  (with-slots (root root-bitlen hash test count) dict
+    (declare #.*fastest*)
+    (let ((index (index root-bitlen (funcall hash key)))
+          (exists? nil))
+      (setf #1=(aref root index) 
+            (delete-if (lambda (e)
+                         (and (funcall test key (car e))
+                              (decf count)
+                              (setf exists? t)))
+                       (the list #1#)))
+      exists?)))
+
+(defmacro each ((entry dict &optional result-form) &body body)
+  (let ((entries (gensym)))
+    `(loop FOR ,entries ACROSS (dict-root ,dict)
+       DO
+       (loop FOR ,entry IN ,entries
+         DO
+         (locally ,@body))
+       FINALLY
+       (return ,result-form))))
+
+(defun map (fn dict)
   (declare #.*interface*
-           (hashtrie hashtrie))
-  (with-slots (root root-depth count next-resize-trigger) hashtrie
-    (when (= count next-resize-trigger)
-      (resize hashtrie))
-    (set-impl key value (hash key) root root-depth hashtrie)))
-
-(defsetf get (key hashtrie) (new-value)
-  `(progn (set ,key ,new-value ,hashtrie)
-          ,new-value))
+           (dict dict)
+           (function fn))
+  (let ((acc '()))
+    (each (e dict (nreverse acc))
+      (push (funcall fn (car e) (cdr e)) acc))))
