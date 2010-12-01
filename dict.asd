@@ -2,7 +2,7 @@
 
 (defsystem dict
   :name "dict"
-  :version "0.0.1"
+  :version "0.0.2"
   :author "Takeru Ohta"
   :description "An implementation of hash table"
   
