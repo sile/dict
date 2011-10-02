@@ -1,99 +1,165 @@
 (in-package :dict)
 
-(declaim (inline index make make-dict count))
+(declaim (inline make-node node-hash node-key node-value node-next
+                 
+                 make-dict dict-buckets dict-bitlen dict-count 
+                 dict-rehash-threshold dict-rehash-border dict-functor
+
+                 recalc-rehash-border bucket-index find-candicate
+                 normalize-hashcode rehash-node count-and-check-border
+
+                 make get (setf get) remove count map))
+(declaim )
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defstruct node
+    (hash   0 :type hashcode :read-only t)
+    (key    t :type t        :read-only t)
+    (value  t :type t)
+    (next nil :type (or null node))))
+(defconst +TAIL+ (make-node :hash +MAX_HASHCODE+)) ; sentinel node
 
 (defstruct dict
-  (count               0 :type positive-fixnum)
-  (next-resize-trigger 0 :type positive-fixnum)
-  (root-bitlen         0 :type fixnum-length)
-  (root              #() :type simple-vector)
-  (test            #'eql :type function)
-  (hash         #'sxhash :type hash-function))
+  (buckets        #() :type (simple-array node))
+  (bitlen           2 :type hashcode-width)
+  (count            0 :type positive-fixnum)
+  (rehash-threshold 0 :type number  :read-only t)
+  (rehash-border    0 :type positive-fixnum)
+  (functor          t :type functor :read-only t))
 
-(defun make (&key (test #'eql) (hash #'sxhash))
-  (declare #+SBCL (sb-ext:muffle-conditions sb-ext:compiler-note)
-           (function test)
-           (hash-function hash))
-  (make-dict :next-resize-trigger (* 16 4)
-             :root-bitlen 4
-             :test test
-             :hash hash
-             :root (make-array 16 :initial-element '())))
+; TODO: print-object
+
+;;;;;;;;;;;
+(defun recalc-rehash-border (dict)
+  (with-slots (buckets rehash-threshold rehash-border) (the dict dict)
+    (setf rehash-border (ceiling (* (length buckets) rehash-threshold)))
+    dict))
+
+(defun bucket-index (hashcode dict)
+  (declare (hashcode hashcode))
+  (ldb (byte (dict-bitlen dict) 0) hashcode))
+
+(defun find-candidate (hashcode dict &aux (index (bucket-index hashcode dict)))
+  (declare (hashcode hashcode))
+  (labels ((recur (pred node)
+             (if (> hashcode (node-hash node))
+                 (recur node (node-next node))
+               (values index pred node))))
+    (recur nil (aref (dict-buckets dict) index))))
+
+(defmacro with-candidate ((place node) (hashcode dict) &body body)
+  (with-gensyms (bucket-index pred)
+    `(multiple-value-bind (,bucket-index ,pred ,node)
+                          (find-candidate ,hashcode ,dict)
+       (declare (ignorable ,bucket-index))
+       (if ,pred
+           (symbol-macrolet ((,place (node-next ,pred)))
+             ,@body)
+         (symbol-macrolet ((,place (aref (dict-buckets ,dict) ,bucket-index)))
+           ,@body)))))
+
+(defun normalize-hashcode (hashcode)
+  (declare (hashcode hashcode))
+  (ldb (byte #.(1- +HASHCODE_WIDTH+) 0) hashcode))
+
+(defmacro find-node-case ((node &optional (place (gensym)) (hashcode (gensym)))
+                          (key dict hash-fn test-fn) 
+                          &key if-existing if-absent)
+  `(let ((,hashcode (normalize-hashcode (,hash-fn ,key))))
+     (with-candidate (,place ,node) (,hashcode ,dict)
+       (if (and (= ,hashcode (node-hash ,node))
+                (,test-fn ,key (node-key ,node)))
+           ,if-existing
+         ,if-absent))))
+
+(defmacro each-node ((node buckets &optional return-form) &body body)
+  (with-gensyms (head next)
+    `(loop FOR ,head ACROSS ,buckets DO
+       (loop FOR ,node = ,head THEN ,next
+             FOR ,next = (node-next ,node)
+             WHILE ,next DO
+         (locally ,@body))
+       FINALLY
+       (return ,return-form))))
+
+(defun rehash-node (node dict &aux (hashcode (node-hash node)))
+  (with-candidate (next place) (hashcode dict)
+    (setf place node
+          (node-next node) next)))
+  
+(defun enlarge (dict)
+  (with-slots (bitlen buckets) (the dict dict)
+    (let ((old-buckets buckets))
+      (incf bitlen)
+      (setf buckets (make-array (ash 1 bitlen) :element-type 'node :initial-element +TAIL+))
+      
+      (each-node (node old-buckets (recalc-rehash-border dict))
+        (rehash-node node dict)))))
+
+(defun count-and-check-border (dict)
+  (with-slots (buckets count) (the dict dict)
+    (incf count)
+    (< count (length buckets))))
+
+(defmacro generate-get-fn (hash-fn test-fn)
+  (with-gensyms (key dict node default)
+    `(lambda (,key ,dict ,default)
+       (find-node-case (,node) (,key ,dict ,hash-fn ,test-fn)
+         :if-existing (values (node-value ,node) t)
+         :if-absent   (values ,default nil)))))
+
+(defmacro generate-set-fn (hash-fn test-fn)
+  (with-gensyms (new-value key dict place node new-node hashcode)
+    `(lambda (,new-value ,key ,dict)
+       (find-node-case (,node ,place ,hashcode) (,key ,dict ,hash-fn ,test-fn)
+         :if-existing (setf (node-value ,node) ,new-value)
+         :if-absent
+         (let ((,new-node (make-node :key ,key :value ,new-value :hash ,hashcode :next ,node)))
+           (setf ,place ,new-node)
+           (unless (count-and-check-border ,dict)
+             (enlarge ,dict)))))))
+
+(defmacro generate-rem-fn (hash-fn test-fn)
+  (with-gensyms (key dict place node)
+    `(lambda (,key ,dict)
+       (find-node-case (,node ,place) (,key ,dict ,hash-fn ,test-fn)
+         :if-absent (values nil)
+         :if-existing 
+         (progn (setf ,place (node-next ,node))
+                (values t))))))
+
+;;;;;;;;;;;;
+(defun make (&key (test 'eql) (rehash-threshold 0.75) (size 8))
+  (declare (positive-fixnum size))
+  (let* ((bitlen (integer-length size))
+         (buckets-size (ash 1 bitlen)))
+    (recalc-rehash-border
+     (make-dict :buckets (make-array buckets-size :element-type 'node :initial-element +TAIL+)
+                :bitlen bitlen
+                :rehash-threshold rehash-threshold
+                :functor (find-test test)))))
+
+(defun get (key dict &optional default)
+  (funcall (functor-get (dict-functor dict)) key dict default))
+
+(defun (setf get) (new-value key dict)
+  (funcall (functor-set (dict-functor dict)) new-value key dict)
+  new-value)
+
+(defun remove (key dict)
+  (funcall (functor-rem (dict-functor dict)) key dict))
 
 (defun count (dict)
   (dict-count dict))
 
-(defun index (len hash-code)
-  (ldb (byte len 0) hash-code))
+(defmacro each ((key value dict &optional return-form) &body body)
+  (with-gensyms (node)
+    `(each-node (,node ,dict ,return-form)
+       (let ((,key (node-key ,node))
+             (,value (node-value ,node)))
+         ,@body))))
 
-(defun get (key dict)
-  (declare #.*interface* (dict dict))
-  (with-slots (root root-bitlen hash test) dict
-    (declare #.*fastest*)
-    (let ((entries (aref root (index root-bitlen (funcall hash key)))))
-      (a.if (assoc key entries :test test)
-            (values (cdr it) t)
-        (values nil nil)))))
-
-(defun resize (dict)
-  (declare #.*fastest* (dict dict))
-  (with-slots (root root-bitlen next-resize-trigger hash) dict
-    (let ((new-root (make-array (* (length root) 16) :initial-element nil))
-          (new-root-bitlen (+ root-bitlen 4)))
-      (declare (fixnum-length new-root-bitlen))
-      (loop FOR entries ACROSS root
-        DO
-        (loop FOR e IN entries
-              FOR index = (index new-root-bitlen (funcall hash (car e)))
-          DO
-          (push e (aref new-root index))))
-    (setf next-resize-trigger (the positive-fixnum (* next-resize-trigger 16))
-          root new-root
-          root-bitlen new-root-bitlen))))
-
-(defun set (key value dict)
-  (declare #.*interface* (dict dict))
-  (with-slots (root root-bitlen count next-resize-trigger hash test) dict
-    (let ((index (index root-bitlen (funcall hash key))))
-      (multiple-value-bind (new-list added?) (acons! key value (aref root index) :test test)
-        (when added?
-          (setf (aref root index) new-list)
-          (incf count)
-          (when (= count next-resize-trigger)
-            (resize dict))))))
-  value)
-
-(defsetf get (key dict) (new-value)
-  `(set ,key ,new-value ,dict))
-
-(defun remove (key dict)
-  (declare #.*interface* (dict dict))
-  (with-slots (root root-bitlen hash test count) dict
-    (declare #.*fastest*)
-    (let ((index (index root-bitlen (funcall hash key)))
-          (exists? nil))
-      (setf #1=(aref root index) 
-            (delete-if (lambda (e)
-                         (and (funcall test key (car e))
-                              (decf count)
-                              (setf exists? t)))
-                       (the list #1#)))
-      exists?)))
-
-(defmacro each ((entry dict &optional result-form) &body body)
-  (let ((entries (gensym)))
-    `(loop FOR ,entries ACROSS (dict-root ,dict)
-       DO
-       (loop FOR ,entry IN ,entries
-         DO
-         (locally ,@body))
-       FINALLY
-       (return ,result-form))))
-
-(defun map (fn dict)
-  (declare #.*interface*
-           (dict dict)
-           (function fn))
-  (let ((acc '()))
-    (each (e dict (nreverse acc))
-      (push (funcall fn (car e) (cdr e)) acc))))
+(defun map (fn dict &aux acc)
+  (declare (function fn))
+  (each (key value dict (nreverse acc))
+    (push (funcall fn key value) acc)))
