@@ -1,6 +1,6 @@
 (in-package :dict)
-(defstruct dict)
 
+#+C
 (declaim (inline make-node node-hash node-key node-value node-next
                  
                  make-dict dict-buckets dict-bitlen dict-count 
@@ -10,18 +10,13 @@
                  normalize-hashcode rehash-node count-and-check-border
 
                  make get (setf get) remove count map clear))
-(declaim #.*fastest*)
+;(declaim #.*fastest*)
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (deftype node () 'simple-vector)
-  (defstruct (node (:type vector))
-    (hash   0 :type hashcode :read-only t)
-    (key    t :type t        :read-only t)
-    (value  t :type t)
-    (next nil :type (or null node))))
-(defconst +TAIL+ (make-node :hash +MAX_HASHCODE+)) ; sentinel node
+(deftype node () 'array-index)
+(defconst +TAIL+ 0)
 
 (defstruct dict
+  (alloca           t :type node-allocator)
   (buckets        #() :type (simple-array node))
   (bitlen           2 :type hashcode-width)
   (count            0 :type positive-fixnum)
@@ -53,17 +48,18 @@
   (declare (hashcode hashcode))
   (ldb (byte #.(1- +HASHCODE_WIDTH+) 0) hashcode))
 
-(defun find-candidate (hashcode dict &aux (index (bucket-index hashcode dict)))
+(defun find-candidate (hashcode dict &aux (index (bucket-index hashcode dict))
+                                          (a (dict-alloca dict)))
   (declare (hashcode hashcode))
   (labels ((recur (pred node)
-             (if (> hashcode (node-hash node))
-                 (recur node (node-next node))
+             (if (> hashcode (node-hash node a))
+                 (recur node (node-next node a))
                (values index pred node))))
     (recur nil (aref (dict-buckets dict) index))))
 
 (defmacro with-node-place (place (pred dict bucket-index) &body body)
   `(if ,pred
-       (symbol-macrolet ((,place (node-next ,pred)))
+       (symbol-macrolet ((,place (node-next ,pred (dict-alloca ,dict))))
          ,@body)
      (symbol-macrolet ((,place (aref (dict-buckets ,dict) ,bucket-index)))
        ,@body)))
@@ -84,38 +80,38 @@
                             (find-candidate ,hashcode ,dict)
          (declare (ignorable ,bucket-index))
          (labels ((,recur (,pred ,node)
-                    (cond ((/= ,hashcode (node-hash ,node))
+                    (cond ((/= ,hashcode (node-hash ,node (dict-alloca ,dict)))
                            (with-node-place ,place (,pred ,dict ,bucket-index)
                              ,if-absent))
-                          ((,test-fn ,key (node-key ,node))
+                          ((,test-fn ,key (node-key ,node (dict-alloca ,dict)))
                            (with-node-place ,place (,pred ,dict ,bucket-index)
                              ,if-existing))
                           (t
-                           (,recur ,node (node-next ,node))))))
+                           (,recur ,node (node-next ,node (dict-alloca ,dict)))))))
            (,recur ,pred ,node))))))
 
-(defmacro each-node ((node buckets &optional return-form) &body body)
+(defmacro each-node ((node buckets alloca &optional return-form) &body body)
   (with-gensyms (head next)
     `(loop FOR ,head ACROSS (the (simple-array node) ,buckets) DO
        (loop FOR ,node = ,head THEN ,next
-             FOR ,next = (node-next ,node)
-             WHILE ,next DO
+             FOR ,next = (node-next ,node ,alloca)
+             UNTIL (eq ,node +TAIL+) DO
          (locally ,@body))
        FINALLY
        (return ,return-form))))
 
-(defun rehash-node (node dict &aux (hashcode (node-hash node)))
+(defun rehash-node (node dict &aux (hashcode (node-hash node (dict-alloca dict))))
   (with-candidate (next place) (hashcode dict)
     (setf place node
-          (node-next node) next)))
+          (node-next node (dict-alloca dict)) next)))
   
 (defun enlarge (dict)
-  (with-slots (bitlen buckets) (the dict dict)
+  (with-slots (bitlen buckets alloca) (the dict dict)
     (let ((old-buckets buckets))
       (incf bitlen)
       (setf buckets (make-array (ash 1 bitlen) :element-type 'node :initial-element +TAIL+))
       
-      (each-node (node old-buckets (recalc-rehash-border dict))
+      (each-node (node old-buckets alloca (recalc-rehash-border dict))
         (rehash-node node dict)))))
 
 (defun count-and-check-border (dict)
@@ -127,16 +123,17 @@
   (with-gensyms (key dict node default)
     `(lambda (,key ,dict ,default)
        (find-node-case (,node) (,key ,dict ,hash-fn ,test-fn)
-         :if-existing (values (node-value ,node) t)
+         :if-existing (values (node-value ,node (dict-alloca ,dict)) t)
          :if-absent   (values ,default nil)))))
 
 (defmacro generate-set-fn (hash-fn test-fn)
   (with-gensyms (new-value key dict place node new-node hashcode)
     `(lambda (,new-value ,key ,dict)
        (find-node-case (,node ,place ,hashcode) (,key ,dict ,hash-fn ,test-fn)
-         :if-existing (setf (node-value ,node) ,new-value)
+         :if-existing (setf (node-value ,node (dict-alloca ,dict)) ,new-value)
          :if-absent
-         (let ((,new-node (make-node :key ,key :value ,new-value :hash ,hashcode :next ,node)))
+         (let ((,new-node (make-node (dict-alloca ,dict)
+                                     :key ,key :value ,new-value :hash ,hashcode :next ,node)))
            (setf ,place ,new-node)
            (unless (count-and-check-border ,dict)
              (enlarge ,dict)))))))
@@ -147,7 +144,7 @@
        (find-node-case (,node ,place) (,key ,dict ,hash-fn ,test-fn)
          :if-absent (values nil)
          :if-existing 
-         (progn (setf ,place (node-next ,node))
+         (progn (setf ,place (node-next ,node (dict-alloca ,dict)))
                 (decf (dict-count ,dict))
                 (values t))))))
 
@@ -159,9 +156,10 @@
            (positive-fixnum size)
            ((or symbol functor) test))
   (let* ((bitlen (integer-length (1- size)))
-         (buckets-size (ash 1 bitlen)))
+         (buckets-size (the positive-fixnum (ash 1 bitlen))))
     (recalc-rehash-border
-     (make-dict :buckets (make-array buckets-size :element-type 'node :initial-element +TAIL+)
+     (make-dict :alloca (make-allocator buckets-size)
+                :buckets (make-array buckets-size :element-type 'node :initial-element +TAIL+)
                 :bitlen bitlen
                 :rehash-threshold rehash-threshold
                 :functor (get-test test)))))
@@ -185,9 +183,9 @@
 
 (defmacro each ((key value dict &optional return-form) &body body)
   (with-gensyms (node)
-    `(each-node (,node (dict-buckets ,dict) ,return-form)
-       (let ((,key (node-key ,node))
-             (,value (node-value ,node)))
+    `(each-node (,node (dict-buckets ,dict) (dict-alloca ,dict) ,return-form)
+       (let ((,key (node-key ,node (dict-alloca ,dict)))
+             (,value (node-value ,node (dict-alloca ,dict))))
          ,@body))))
 
 (defun map (fn dict &aux acc)
