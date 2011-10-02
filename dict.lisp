@@ -9,7 +9,7 @@
                  normalize-hashcode rehash-node count-and-check-border
 
                  make get (setf get) remove count map clear))
-(declaim )
+(declaim #.*fastest*)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defstruct node
@@ -40,6 +40,10 @@
   (declare (hashcode hashcode))
   (ldb (byte (dict-bitlen dict) 0) hashcode))
 
+(defun normalize-hashcode (hashcode)
+  (declare (hashcode hashcode))
+  (ldb (byte #.(1- +HASHCODE_WIDTH+) 0) hashcode))
+
 (defun find-candidate (hashcode dict &aux (index (bucket-index hashcode dict)))
   (declare (hashcode hashcode))
   (labels ((recur (pred node)
@@ -48,30 +52,38 @@
                (values index pred node))))
     (recur nil (aref (dict-buckets dict) index))))
 
+(defmacro with-node-place (place (pred dict bucket-index) &body body)
+  `(if ,pred
+       (symbol-macrolet ((,place (node-next ,pred)))
+         ,@body)
+     (symbol-macrolet ((,place (aref (dict-buckets ,dict) ,bucket-index)))
+       ,@body)))
+
 (defmacro with-candidate ((node place) (hashcode dict) &body body)
   (with-gensyms (bucket-index pred)
     `(multiple-value-bind (,bucket-index ,pred ,node)
                           (find-candidate ,hashcode ,dict)
-       (declare (ignorable ,bucket-index))
-       (if ,pred
-           (symbol-macrolet ((,place (node-next ,pred)))
-             ,@body)
-         (symbol-macrolet ((,place (aref (dict-buckets ,dict) ,bucket-index)))
-           ,@body)))))
-
-(defun normalize-hashcode (hashcode)
-  (declare (hashcode hashcode))
-  (ldb (byte #.(1- +HASHCODE_WIDTH+) 0) hashcode))
+       (with-node-place ,place (,pred ,dict ,bucket-index)
+         ,@body))))
 
 (defmacro find-node-case ((node &optional (place (gensym)) (hashcode (gensym)))
                           (key dict hash-fn test-fn) 
                           &key if-existing if-absent)
-  `(let ((,hashcode (normalize-hashcode (,hash-fn ,key))))
-     (with-candidate (,node ,place) (,hashcode ,dict)
-       (if (and (= ,hashcode (node-hash ,node))
-                (,test-fn ,key (node-key ,node)))
-           ,if-existing
-         ,if-absent))))
+  (with-gensyms (bucket-index pred recur)
+    `(let ((,hashcode (normalize-hashcode (,hash-fn ,key))))
+       (multiple-value-bind (,bucket-index ,pred ,node)
+                            (find-candidate ,hashcode ,dict)
+         (declare (ignorable ,bucket-index))
+         (labels ((,recur (,pred ,node)
+                    (cond ((/= ,hashcode (node-hash ,node))
+                           (with-node-place ,place (,pred ,dict ,bucket-index)
+                             ,if-absent))
+                          ((,test-fn ,key (node-key ,node))
+                           (with-node-place ,place (,pred ,dict ,bucket-index)
+                             ,if-existing))
+                          (t
+                           (,recur ,node (node-next ,node))))))
+           (,recur ,pred ,node))))))
 
 (defmacro each-node ((node buckets &optional return-form) &body body)
   (with-gensyms (head next)
@@ -98,9 +110,9 @@
         (rehash-node node dict)))))
 
 (defun count-and-check-border (dict)
-  (with-slots (buckets count) (the dict dict)
+  (with-slots (rehash-border count) (the dict dict)
     (incf count)
-    (< count (length buckets))))
+    (< count rehash-border)))
 
 (defmacro generate-get-fn (hash-fn test-fn)
   (with-gensyms (key dict node default)
@@ -131,12 +143,12 @@
                 (values t))))))
 
 ;;;;;;;;;;;;
-(defun make (&key (test 'eql) (rehash-threshold 0.75) (size 8))
+(defun make (&key (test 'eql) (rehash-threshold 1.0) (size 8))
   (declare #.*interface*
            (number rehash-threshold)
            (positive-fixnum size)
            ((or symbol functor) test))
-  (let* ((bitlen (integer-length size))
+  (let* ((bitlen (integer-length (1- size)))
          (buckets-size (ash 1 bitlen)))
     (recalc-rehash-border
      (make-dict :buckets (make-array buckets-size :element-type 'node :initial-element +TAIL+)
