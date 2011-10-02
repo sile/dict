@@ -1,4 +1,5 @@
 (in-package :dict)
+(defstruct dict)
 
 (declaim (inline make-node node-hash node-key node-value node-next
                  

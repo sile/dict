@@ -2,7 +2,7 @@
 
 (defsystem dict
   :name "dict"
-  :version "0.1.1"
+  :version "0.2.0"
   :author "Takeru Ohta"
   :description "A hash table"
   
@@ -10,5 +10,6 @@
   :components ((:file "package")
                (:file "util")
                (:file "functor")
+               (:file "node-allocator")
                (:file "dict")
                (:file "predefine-test")))

@@ -21,6 +21,7 @@
 (in-package :dict)
 
 (deftype positive-fixnum () '(integer 0 #.most-positive-fixnum))
+(deftype array-index () 'positive-fixnum)
 (deftype hashcode () 'positive-fixnum)
 (deftype hashcode-width () '(integer 1 #.(integer-length most-positive-fixnum)))
 (deftype set-fn () '(function (t t dict) t))

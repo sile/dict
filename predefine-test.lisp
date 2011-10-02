@@ -1,5 +1,6 @@
 (in-package :dict)
 
+#+C
 (locally
  (declare #.*muffle-note*
           #.*fastest*)

@@ -7,3 +7,6 @@
 (defmacro defconst (name value &optional documentation)
   `(defconstant ,name (if (boundp ',name) (symbol-value ',name) ,value)
      ,@(when documentation (list documentation))))
+
+(defmacro post-incf (x)
+  `(prog1 ,x (incf ,x)))
