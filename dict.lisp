@@ -12,7 +12,8 @@
 (declaim #.*fastest*)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defstruct node
+  (deftype node () 'simple-vector)
+  (defstruct (node (:type vector))
     (hash   0 :type hashcode :read-only t)
     (key    t :type t        :read-only t)
     (value  t :type t)
@@ -162,7 +163,7 @@
      (make-dict :buckets (make-array buckets-size :element-type 'node :initial-element +TAIL+)
                 :bitlen bitlen
                 :rehash-threshold rehash-threshold
-                :functor (find-test test)))))
+                :functor (get-test test)))))
 
 (defun get (key dict &optional default)
   (declare #.*interface*)
