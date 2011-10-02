@@ -85,12 +85,12 @@
               (node-value pos allocator) value)
         pos))))
 
+;; TODO: test
 (defun delete-node (node-index allocator)
   (with-slots (position) (the node-allocator allocator)
     (setf (node-key node-index allocator) t
           (node-value node-index allocator) t
           
-          ;; XXX; out-of-range
           (node-next node-index allocator) (node-next position allocator)
           (node-flag node-index allocator) (node-flag position allocator)
           

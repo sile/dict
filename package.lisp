@@ -22,8 +22,8 @@
 
 (deftype positive-fixnum () '(integer 0 #.most-positive-fixnum))
 (deftype array-index () 'positive-fixnum)
-(deftype hashcode () 'positive-fixnum)
-(deftype hashcode-width () '(integer 1 #.(integer-length most-positive-fixnum)))
+(deftype hashcode () '(unsigned-byte 30))
+(deftype hashcode-width () '(mod 31))
 (deftype set-fn () '(function (t t dict) t))
 (deftype get-fn () '(function (t dict t) (values t boolean)))
 (deftype rem-fn () '(function (t dict) boolean))
@@ -34,7 +34,7 @@
   (defparameter *normal* '(optimize (speed 1) (safety 3) (debug 2)))
   (defparameter *muffle-note* #-SBCL '(ignore)
                               #+SBCL '(sb-ext:muffle-conditions sb-ext:compiler-note))
-  (defconstant +HASHCODE_WIDTH+ #.(integer-length most-positive-fixnum))
-  (defconstant +MAX_HASHCODE+ most-positive-fixnum))
+  (defconstant +HASHCODE_WIDTH+ 30)
+  (defconstant +MAX_HASHCODE+ #.(1- (ash 1 30))))
 
 (defparameter *functor-repository* (make-hash-table :test #'eq))
