@@ -2,11 +2,13 @@
 
 (defsystem dict
   :name "dict"
-  :version "0.0.2"
+  :version "0.1.0"
   :author "Takeru Ohta"
-  :description "An implementation of hash table"
+  :description "A hash table"
   
   :serial t
   :components ((:file "package")
                (:file "util")
-               (:file "dict")))
+               (:file "functor")
+               (:file "dict")
+               (:file "predefine-test")))
