@@ -143,6 +143,7 @@
          :if-absent (values nil)
          :if-existing 
          (progn (setf ,place (node-next ,node (dict-alloca ,dict)))
+                (delete-node ,node (dict-alloca ,dict))
                 (decf (dict-count ,dict))
                 (values t))))))
 
