@@ -8,7 +8,7 @@
                  recalc-rehash-border bucket-index find-candicate
                  normalize-hashcode rehash-node count-and-check-border
 
-                 make get (setf get) remove count map))
+                 make get (setf get) remove count map clear))
 (declaim )
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -31,6 +31,7 @@
 
 ;;;;;;;;;;;
 (defun recalc-rehash-border (dict)
+  (declare #.*muffle-note*)
   (with-slots (buckets rehash-threshold rehash-border) (the dict dict)
     (setf rehash-border (ceiling (* (length buckets) rehash-threshold)))
     dict))
@@ -47,7 +48,7 @@
                (values index pred node))))
     (recur nil (aref (dict-buckets dict) index))))
 
-(defmacro with-candidate ((place node) (hashcode dict) &body body)
+(defmacro with-candidate ((node place) (hashcode dict) &body body)
   (with-gensyms (bucket-index pred)
     `(multiple-value-bind (,bucket-index ,pred ,node)
                           (find-candidate ,hashcode ,dict)
@@ -66,7 +67,7 @@
                           (key dict hash-fn test-fn) 
                           &key if-existing if-absent)
   `(let ((,hashcode (normalize-hashcode (,hash-fn ,key))))
-     (with-candidate (,place ,node) (,hashcode ,dict)
+     (with-candidate (,node ,place) (,hashcode ,dict)
        (if (and (= ,hashcode (node-hash ,node))
                 (,test-fn ,key (node-key ,node)))
            ,if-existing
@@ -74,7 +75,7 @@
 
 (defmacro each-node ((node buckets &optional return-form) &body body)
   (with-gensyms (head next)
-    `(loop FOR ,head ACROSS ,buckets DO
+    `(loop FOR ,head ACROSS (the (simple-array node) ,buckets) DO
        (loop FOR ,node = ,head THEN ,next
              FOR ,next = (node-next ,node)
              WHILE ,next DO
@@ -126,11 +127,15 @@
          :if-absent (values nil)
          :if-existing 
          (progn (setf ,place (node-next ,node))
+                (decf (dict-count ,dict))
                 (values t))))))
 
 ;;;;;;;;;;;;
 (defun make (&key (test 'eql) (rehash-threshold 0.75) (size 8))
-  (declare (positive-fixnum size))
+  (declare #.*interface*
+           (number rehash-threshold)
+           (positive-fixnum size)
+           ((or symbol functor) test))
   (let* ((bitlen (integer-length size))
          (buckets-size (ash 1 bitlen)))
     (recalc-rehash-border
@@ -140,26 +145,38 @@
                 :functor (find-test test)))))
 
 (defun get (key dict &optional default)
+  (declare #.*interface*)
   (funcall (functor-get (dict-functor dict)) key dict default))
 
 (defun (setf get) (new-value key dict)
+  (declare #.*interface*)
   (funcall (functor-set (dict-functor dict)) new-value key dict)
   new-value)
 
 (defun remove (key dict)
+  (declare #.*interface*)
   (funcall (functor-rem (dict-functor dict)) key dict))
 
 (defun count (dict)
+  (declare #.*interface*)
   (dict-count dict))
 
 (defmacro each ((key value dict &optional return-form) &body body)
   (with-gensyms (node)
-    `(each-node (,node ,dict ,return-form)
+    `(each-node (,node (dict-buckets ,dict) ,return-form)
        (let ((,key (node-key ,node))
              (,value (node-value ,node)))
          ,@body))))
 
 (defun map (fn dict &aux acc)
-  (declare (function fn))
+  (declare #.*interface*
+           (function fn))
   (each (key value dict (nreverse acc))
     (push (funcall fn key value) acc)))
+
+(defun clear (dict)
+  (declare #.*interface*)
+  (with-slots (count buckets) (the dict dict)
+    (setf count 0)
+    (fill buckets +TAIL+))
+  t)
