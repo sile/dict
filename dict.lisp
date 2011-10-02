@@ -27,14 +27,21 @@
   (rehash-border    0 :type positive-fixnum)
   (functor          t :type functor :read-only t))
 
-; TODO: print-object
+(defmethod print-object ((o dict) stream)
+  (declare (stream stream))
+  (print-unreadable-object (o stream :identity t :type t)
+    (with-slots (count functor) o
+      (format stream "~s ~s ~s ~s" 
+              :test (functor-name functor)
+              :count count))))
 
-;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;
+;;; internal functions
 (defun recalc-rehash-border (dict)
   (declare #.*muffle-note*)
   (with-slots (buckets rehash-threshold rehash-border) (the dict dict)
-    (setf rehash-border (ceiling (* (length buckets) rehash-threshold)))
-    dict))
+    (setf rehash-border (ceiling (* (length buckets) rehash-threshold))))
+  dict)
 
 (defun bucket-index (hashcode dict)
   (declare (hashcode hashcode))
@@ -142,7 +149,8 @@
                 (decf (dict-count ,dict))
                 (values t))))))
 
-;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;
+;;; external functions
 (defun make (&key (test 'eql) (rehash-threshold 1.0) (size 8))
   (declare #.*interface*
            (number rehash-threshold)
@@ -191,4 +199,8 @@
   (with-slots (count buckets) (the dict dict)
     (setf count 0)
     (fill buckets +TAIL+))
-  t)
+  (values t))
+
+(defun test-name (dict)
+  (declare #.*interface*)
+  (functor-name (dict-functor dict)))

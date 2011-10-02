@@ -5,10 +5,15 @@
 (declaim #.*fastest*)
 
 (defstruct functor
-  (name t :type symbol)
-  (set  t :type set-fn)
-  (get  t :type get-fn)
-  (rem  t :type rem-fn))
+  (name t :type symbol :read-only t)
+  (set  t :type set-fn :read-only t)
+  (get  t :type get-fn :read-only t)
+  (rem  t :type rem-fn :read-only t))
+
+(defmethod print-object ((o functor) stream)
+  (print-unreadable-object (o stream :identity t)
+    (format (the stream stream) "~s ~s ~s"
+            'test :name (functor-name o))))
 
 (defmacro generate-test (hash test &key (name :anonymous))
   `(make-functor :name ,name

@@ -2,6 +2,8 @@
   (:use :common-lisp)
   (:shadow :common-lisp get set remove count map)
   (:export dict
+           test
+           
            make
            count
            get
@@ -13,6 +15,7 @@
            generate-test
            define-test
            undef-test
+           find-test
            list-all-tests
            test-name))
 (in-package :dict)
