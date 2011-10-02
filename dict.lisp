@@ -1,16 +1,13 @@
 (in-package :dict)
 
-#+C
-(declaim (inline make-node node-hash node-key node-value node-next
-                 
-                 make-dict dict-buckets dict-bitlen dict-count 
+(declaim (inline make-dict dict-buckets dict-bitlen dict-count 
                  dict-rehash-threshold dict-rehash-border dict-functor
 
                  recalc-rehash-border bucket-index find-candicate
                  normalize-hashcode rehash-node count-and-check-border
 
                  make get (setf get) remove count map clear))
-;(declaim #.*fastest*)
+(declaim #.*fastest*)
 
 (deftype node () 'array-index)
 (defconst +TAIL+ 0)
@@ -113,6 +110,7 @@
       
       (each-node (node old-buckets alloca (recalc-rehash-border dict))
         (rehash-node node dict)))))
+
 
 (defun count-and-check-border (dict)
   (with-slots (rehash-border count) (the dict dict)
