@@ -51,7 +51,7 @@
         (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
 
 (defmacro node-next (node-index allocator)
-  `(ldb (byte #.(1- +HASHCODE_WIDTH+) 1)
+  `(ldb (byte #.(1- +HASHCODE_WIDTH+) 0)
         (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
 
 (defmacro node-key (node-index allocator)
@@ -61,18 +61,23 @@
   `(aref (node-allocator-entries ,allocator) (1+ (* 2 ,node-index))))
 
 (defmacro node-flag (node-index allocator)
-  `(ldb (byte 1 0) (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
+  `(ldb (byte 1 #.(1- +HASHCODE_WIDTH+))
+        (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
+
+(defmacro node-x (node-index allocator)
+  `(aref (node-allocator-hash-and-nexts ,allocator) ,node-index))
 
 (defun make-node (allocator &key hash next key value)
   (declare (hashcode hash)
            (array-index next))
-  (unless (check-capacity allocator)
-    (enlarge-allocator allocator))
-  
+
   (with-slots (position) (the node-allocator allocator)
     (let ((pos 
            (if (zerop (node-flag position allocator))
-               (post-incf position)
+               (prog1 position
+                 (incf position)
+                 (unless (check-capacity allocator)
+                   (enlarge-allocator allocator)))
              (let ((reuse-pos (node-next position allocator)))
                (setf (node-flag position allocator) (node-flag reuse-pos allocator)
                      (node-next position allocator) (node-next reuse-pos allocator)

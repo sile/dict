@@ -10,7 +10,7 @@
 (declaim #.*fastest*)
 
 (deftype node () 'array-index)
-(defconst +TAIL+ 0)
+(defconstant +TAIL+ 0)
 
 (defstruct dict
   (alloca           t :type node-allocator)
@@ -45,12 +45,11 @@
   (declare (hashcode hashcode))
   (ldb (byte #.(1- +HASHCODE_WIDTH+) 0) hashcode))
 
-(defun find-candidate (hashcode dict &aux (index (bucket-index hashcode dict))
-                                          (a (dict-alloca dict)))
+(defun find-candidate (hashcode dict &aux (index (bucket-index hashcode dict)))
   (declare (hashcode hashcode))
   (labels ((recur (pred node)
-             (if (> hashcode (node-hash node a))
-                 (recur node (node-next node a))
+             (if (> hashcode (node-hash node (dict-alloca dict)))
+                 (recur node (node-next node (dict-alloca dict)))
                (values index pred node))))
     (recur nil (aref (dict-buckets dict) index))))
 
@@ -99,6 +98,7 @@
 
 (defun rehash-node (node dict &aux (hashcode (node-hash node (dict-alloca dict))))
   (with-candidate (next place) (hashcode dict)
+    (declare (node next))
     (setf place node
           (node-next node (dict-alloca dict)) next)))
   
@@ -131,7 +131,8 @@
          :if-existing (setf (node-value ,node (dict-alloca ,dict)) ,new-value)
          :if-absent
          (let ((,new-node (make-node (dict-alloca ,dict)
-                                     :key ,key :value ,new-value :hash ,hashcode :next ,node)))
+                                     :key ,key :value ,new-value 
+                                     :hash ,hashcode :next ,node)))
            (setf ,place ,new-node)
            (unless (count-and-check-border ,dict)
              (enlarge ,dict)))))))
