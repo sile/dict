@@ -21,7 +21,7 @@
 (in-package :dict)
 
 (deftype positive-fixnum () '(integer 0 #.most-positive-fixnum))
-(deftype array-index () 'positive-fixnum)
+(deftype array-index () '(unsigned-byte 29))
 (deftype hashcode () '(unsigned-byte 30))
 (deftype hashcode-width () '(mod 31))
 (deftype set-fn () '(function (t t dict) t))
@@ -29,7 +29,7 @@
 (deftype rem-fn () '(function (t dict) boolean))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defparameter *fastest* '(optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0)))
+  (defparameter *fastest* '(optimize (speed 3) (safety 0) (debug 0)))
   (defparameter *interface* '(optimize (speed 3) (safety 2) (debug 1)))
   (defparameter *normal* '(optimize (speed 1) (safety 3) (debug 2)))
   (defparameter *muffle-note* #-SBCL '(ignore)
