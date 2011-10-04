@@ -38,6 +38,21 @@
 
 (defun enlarge-allocator (allocator)
   (with-slots (hashs keys position) (the node-allocator allocator)
+    (let* ((new-size (* 2 (length hashs)))
+           (new-hashs (make-array new-size :initial-element 0 :element-type '(unsigned-byte 60)))
+           (new-keys (make-array (* 2 new-size))))
+      (declare (array-index new-size))
+      (dotimes (i (length hashs))
+        (setf (aref new-hashs i) (aref hashs i)))
+      (dotimes (i (length keys))
+        (setf (aref new-keys i) (aref keys i)))
+
+      (setf hashs new-hashs
+            keys new-keys))))
+
+#+C
+(defun enlarge-allocator (allocator)
+  (with-slots (hashs keys position) (the node-allocator allocator)
     (let ((new-size (* 2 (length hashs))))
       (declare (array-index new-size))
       (flet ((array (base &optional size)
