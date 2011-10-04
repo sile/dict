@@ -197,6 +197,7 @@
   (declare #.*interface*)
   (with-slots (count buckets) (the dict dict)
     (setf count 0)
+    (clear-nodes (dict-alloca dict))
     (fill buckets +TAIL+))
   (values t))
 

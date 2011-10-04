@@ -96,3 +96,9 @@
           
           (node-next position allocator) node-index
           (node-flag position allocator) 1)))
+
+(defun clear-nodes (allocator)
+  (with-slots (hashs keys position) (the node-allocator allocator)
+    (fill hashs 0 :start 1)
+    (fill keys t :start 2)
+    (setf position 1)))
