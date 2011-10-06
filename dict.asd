@@ -10,6 +10,9 @@
   :components ((:file "package")
                (:file "util")
                (:file "functor")
-               (:file "node-allocator")
+               #+X86-64
+               (:file "node-allocator-64bit")
+               #+X86-32
+               (:file "node-allocator-32bit")
                (:file "dict")
                (:file "predefine-test")))

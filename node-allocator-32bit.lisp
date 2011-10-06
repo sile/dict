@@ -10,18 +10,19 @@
                  make-allocator))
 (declaim #.*fastest*)
 
-(deftype hash-and-next () '(unsigned-byte 60))
 (defstruct node-allocator 
-  (hash-and-nexts #() :type (simple-array hash-and-next))
+  (hashs #() :type (simple-array hashcode))
+  (nexts #() :type (simple-array array-index))
   (entries        #() :type simple-vector)
   (position         0 :type array-index))
 
 (defun make-allocator (initial-size)
   (declare (array-index initial-size))
   (let ((o (make-node-allocator 
-            :hash-and-nexts 
-            (make-array initial-size :element-type 'hash-and-next :initial-element 0)
-              
+            :hashs 
+            (make-array initial-size :element-type 'hashcode)
+            :nexts
+            (make-array initial-size :element-type 'array-index :initial-element 0)              
             :entries
             (make-array (* 2 initial-size)))))
     (make-node o :hash +MAX_HASHCODE+
@@ -29,30 +30,31 @@
     o))
 
 (defun check-capacity (allocator)
-  (with-slots (hash-and-nexts position) (the node-allocator allocator)
-    (< position (1- (length hash-and-nexts)))))
+  (with-slots (hashs position) (the node-allocator allocator)
+    (< position (1- (length hashs)))))
 
 (defun enlarge-allocator (allocator)
-  (with-slots (hash-and-nexts entries position) (the node-allocator allocator)
-    (let* ((new-size (* 2 (length hash-and-nexts)))
-           (new-hash-and-nexts
-            (make-array new-size :element-type 'hash-and-next :initial-element 0))
+  (with-slots (hashs nexts entries position) (the node-allocator allocator)
+    (let* ((new-size (* 2 (length hashs)))
+           (new-hashs
+            (make-array new-size :element-type 'hashcode))
+           (new-nexts
+            (make-array new-size :element-type 'array-index))
            (new-entries (make-array (* 2 new-size))))
       (declare (array-index new-size))
       (flet ((copy (old-ary new-ary)
                (dotimes (i (length old-ary) new-ary)
                  (setf (aref new-ary i) (aref old-ary i)))))
             (declare (inline copy))
-        (setf hash-and-nexts (copy hash-and-nexts new-hash-and-nexts)
+        (setf hashs (copy hashs new-hashs)
+              nexts (copy nexts new-nexts)
               entries (copy entries new-entries))))))
               
 (defmacro node-hash (node-index allocator)
-  `(ldb (byte #.+HASHCODE_WIDTH+ #.+HASHCODE_WIDTH+)
-        (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
+  `(aref (node-allocator-hashs ,allocator) ,node-index))
 
 (defmacro node-next (node-index allocator)
-  `(ldb (byte #.(1- +HASHCODE_WIDTH+) 0)
-        (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
+  `(ldb (byte #.(1- +HASHCODE_WIDTH+) 0) (aref (node-allocator-nexts ,allocator) ,node-index)))
 
 (defmacro node-key (node-index allocator)
   `(aref (node-allocator-entries ,allocator) (* 2 ,node-index)))
@@ -62,10 +64,7 @@
 
 (defmacro node-flag (node-index allocator)
   `(ldb (byte 1 #.(1- +HASHCODE_WIDTH+))
-        (aref (node-allocator-hash-and-nexts ,allocator) ,node-index)))
-
-(defmacro node-x (node-index allocator)
-  `(aref (node-allocator-hash-and-nexts ,allocator) ,node-index))
+        (aref (node-allocator-nexts ,allocator) ,node-index)))
 
 (defun make-node (allocator &key hash next key value)
   (declare (hashcode hash)
@@ -103,7 +102,7 @@
           (node-flag position allocator) 1)))
 
 (defun clear-nodes (allocator)
-  (with-slots (hash-and-nexts entries position) (the node-allocator allocator)
-    (fill hash-and-nexts 0 :start 1)
+  (with-slots (hashs nexts entries position) (the node-allocator allocator)
+    (fill nexts 0 :start 1)
     (fill entries t :start 2)
     (setf position 1)))
