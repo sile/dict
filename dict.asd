@@ -12,7 +12,7 @@
                (:file "functor")
                #+X86-64
                (:file "node-allocator-64bit")
-               #+X86-32
+               #-X86-64
                (:file "node-allocator-32bit")
                (:file "dict")
                (:file "predefine-test")))
