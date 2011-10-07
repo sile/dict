@@ -5,6 +5,7 @@
 
                  recalc-rehash-border bucket-index find-candicate
                  normalize-hashcode rehash-node count-and-check-border
+                 generate-get-fn generate-set-fn generate-rem-fn
 
                  make get (setf get) remove count map clear))
 (declaim #.*fastest*)
@@ -71,7 +72,7 @@
                           (key dict hash-fn test-fn) 
                           &key if-existing if-absent)
   (with-gensyms (bucket-index pred recur)
-    `(let ((,hashcode (normalize-hashcode (,hash-fn ,key))))
+    `(let ((,hashcode (normalize-hashcode (funcall ,hash-fn ,key))))
        (multiple-value-bind (,bucket-index ,pred ,node)
                             (find-candidate ,hashcode ,dict)
          (declare (ignorable ,bucket-index))
@@ -79,7 +80,7 @@
                     (cond ((/= ,hashcode (node-hash ,node (dict-alloca ,dict)))
                            (with-node-place ,place (,pred ,dict ,bucket-index)
                              ,if-absent))
-                          ((,test-fn ,key (node-key ,node (dict-alloca ,dict)))
+                          ((funcall ,test-fn ,key (node-key ,node (dict-alloca ,dict)))
                            (with-node-place ,place (,pred ,dict ,bucket-index)
                              ,if-existing))
                           (t
@@ -117,36 +118,36 @@
     (incf count)
     (< count rehash-border)))
 
-(defmacro generate-get-fn (hash-fn test-fn)
-  (with-gensyms (key dict node default)
-    `(lambda (,key ,dict ,default)
-       (find-node-case (,node) (,key ,dict ,hash-fn ,test-fn)
-         :if-existing (values (node-value ,node (dict-alloca ,dict)) t)
-         :if-absent   (values ,default nil)))))
+(defun generate-get-fn (hash-fn test-fn)
+  (declare (function hash-fn test-fn))
+  (lambda (key dict default)
+    (find-node-case (node) (key dict hash-fn test-fn)
+      :if-existing (values (node-value node (dict-alloca dict)) t)
+      :if-absent   (values default nil))))
 
-(defmacro generate-set-fn (hash-fn test-fn)
-  (with-gensyms (new-value key dict place node new-node hashcode)
-    `(lambda (,new-value ,key ,dict)
-       (find-node-case (,node ,place ,hashcode) (,key ,dict ,hash-fn ,test-fn)
-         :if-existing (setf (node-value ,node (dict-alloca ,dict)) ,new-value)
-         :if-absent
-         (let ((,new-node (make-node (dict-alloca ,dict)
-                                     :key ,key :value ,new-value 
-                                     :hash ,hashcode :next ,node)))
-           (setf ,place ,new-node)
-           (unless (count-and-check-border ,dict)
-             (enlarge ,dict)))))))
+(defun generate-set-fn (hash-fn test-fn)
+  (declare (function hash-fn test-fn))
+  (lambda (new-value key dict)
+    (find-node-case (node place hashcode) (key dict hash-fn test-fn)
+      :if-existing (setf (node-value node (dict-alloca dict)) new-value)
+      :if-absent
+      (let ((new-node (make-node (dict-alloca dict)
+                                 :key key :value new-value 
+                                 :hash hashcode :next node)))
+        (setf place new-node)
+        (unless (count-and-check-border dict)
+          (enlarge dict))))))
 
-(defmacro generate-rem-fn (hash-fn test-fn)
-  (with-gensyms (key dict place node)
-    `(lambda (,key ,dict)
-       (find-node-case (,node ,place) (,key ,dict ,hash-fn ,test-fn)
-         :if-absent (values nil)
-         :if-existing 
-         (progn (setf ,place (node-next ,node (dict-alloca ,dict)))
-                (delete-node ,node (dict-alloca ,dict))
-                (decf (dict-count ,dict))
-                (values t))))))
+(defun generate-rem-fn (hash-fn test-fn)
+  (declare (function hash-fn test-fn))
+  (lambda (key dict)
+    (find-node-case (node place) (key dict hash-fn test-fn)
+      :if-absent (values nil)
+      :if-existing 
+      (progn (setf place (node-next node (dict-alloca dict)))
+             (delete-node node (dict-alloca dict))
+             (decf (dict-count dict))
+             (values t)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;;; external functions

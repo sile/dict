@@ -16,10 +16,11 @@
             'test :name (functor-name o))))
 
 (defmacro generate-test (hash test &key (name :anonymous))
-  `(make-functor :name ,name
-                 :set (generate-set-fn ,hash ,test)
-                 :get (generate-get-fn ,hash ,test)
-                 :rem (generate-rem-fn ,hash ,test)))
+  (with-gensyms (x y)
+    `(make-functor :name ,name
+                   :set (generate-set-fn (lambda (,x) (,hash ,x)) (lambda (,x ,y) (,test ,x ,y)))
+                   :get (generate-get-fn (lambda (,x) (,hash ,x)) (lambda (,x ,y) (,test ,x ,y)))
+                   :rem (generate-rem-fn (lambda (,x) (,hash ,x)) (lambda (,x ,y) (,test ,x ,y))))))
 
 (defmacro define-test (name hash test)
   `(progn (setf (gethash ',name *functor-repository*)
