@@ -3,7 +3,7 @@
 (declaim (inline make-dict dict-buckets dict-bitlen dict-count 
                  dict-rehash-threshold dict-rehash-border dict-functor
 
-                 recalc-rehash-border bucket-index find-candicate
+                 recalc-rehash-border bucket-index find-candidate
                  normalize-hashcode rehash-node count-and-check-border
                  generate-get-fn generate-set-fn generate-rem-fn
 
